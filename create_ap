@@ -27,11 +27,12 @@ SCRIPT_UMASK=0077
 umask $SCRIPT_UMASK
 
 usage() {
-    echo "Usage: "$PROGNAME" [options] <wifi-interface> [<interface-with-internet>] [<access-point-name> [<passphrase>]]"
+    echo "Usage: "$PROGNAME" <wifi-interface> [options]"
     echo
     echo "Options:"
     echo "  -h, --help              Show this help"
     echo "  --version               Print version number"
+    echo "  -a                      Access point name"
     echo "  -c <channel>            Channel number (default: 1)"
     echo "  -w <WPA version>        Use 1 for WPA, use 2 for WPA2, use 1+2 for both (default: 1+2)"
     echo "  -n                      Disable Internet sharing (if you use this, don't pass"
@@ -40,6 +41,8 @@ usage() {
     echo "                          Use: 'nat' for NAT (default)"
     echo "                               'bridge' for bridging"
     echo "                               'none' for no Internet sharing (equivalent to -n)"
+    echo "  --inet                  Interface with internet"
+    echo "  --pass                  Passphrase"
     echo "  --psk                   Use 64 hex digits pre-shared-key instead of passphrase"
     echo "  --hidden                Make the Access Point hidden (do not broadcast the SSID)"
     echo "  --mac-filter            Enable MAC address filtering"
@@ -1027,11 +1030,14 @@ for ((i=0; i<$#; i++)); do
     fi
 done
 
-GETOPT_ARGS=$(getopt -o hc:w:g:de:nm: -l "help","hidden","hostapd-debug:","redirect-to-localhost","mac-filter","mac-filter-accept:","isolate-clients","ieee80211n","ieee80211ac","ht_capab:","vht_capab:","driver:","no-virt","fix-unmanaged","country:","freq-band:","mac:","dhcp-dns:","daemon","stop:","list","list-running","list-clients:","version","psk","no-haveged","no-dns","no-dnsmasq","mkconfig:","config:" -n "$PROGNAME" -- "$@")
-[[ $? -ne 0 ]] && exit 1
-eval set -- "$GETOPT_ARGS"
+#GETOPT_ARGS=$(getopt -o ha:c:w:g:de:nm: -l "help","hidden","hostapd-debug:","redirect-to-localhost","mac-filter","mac-filter-accept:","isolate-clients","ieee80211n","ieee80211ac","ht_capab:","vht_capab:","driver:","no-virt","fix-unmanaged","country:","freq-band:","mac:","dhcp-dns:","daemon","stop:","list","list-running","list-clients:","version","inet","pass","psk","no-haveged","no-dns","no-dnsmasq","mkconfig:","config:" -n "$PROGNAME" -- "$@")
+#[[ $? -ne 0 ]] && exit 1
+#eval set -- "$GETOPT_ARGS"
 
-while :; do
+WIFI_IFACE="$1"
+#shift is bad idea here
+
+while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help)
             usage
@@ -1057,6 +1063,11 @@ while :; do
         --isolate-clients)
             shift
             ISOLATE_CLIENTS=1
+            ;;
+        -a)
+            shift
+            SSID="$1"
+            shift
             ;;
         -c)
             shift
@@ -1170,6 +1181,16 @@ while :; do
             shift
             NO_HAVEGED=1
             ;;
+        --inet)
+            shift
+            INTERNET_IFACE="$1"
+            shift
+            ;;
+        --pass)
+            shift
+            PASSPHRASE="$1"
+            shift
+            ;;
         --psk)
             shift
             USE_PSK=1
@@ -1207,9 +1228,8 @@ while :; do
             shift
             shift
             ;;
-        --)
+        *)
             shift
-            break
             ;;
     esac
 done
@@ -1228,12 +1248,15 @@ if [[ -n "$LOAD_CONFIG" && $# -eq 0 ]]; then
     done
 fi
 
+#echo $FIX_UNMANAGED
+#echo $LIST_RUNNING
 # Check if required number of positional args are present
-if [[ $# -lt 1 && $FIX_UNMANAGED -eq 0  && -z "$STOP_ID" &&
-      $LIST_RUNNING -eq 0 && -z "$LIST_CLIENTS_ID" ]]; then
-    usage >&2
-    exit 1
-fi
+#if [[ $FIX_UNMANAGED -eq 0  && -z "$STOP_ID" &&
+#      $LIST_RUNNING -eq 0 && -z "$LIST_CLIENTS_ID" ]]; then
+#    echo 0
+#    usage >&2
+#    exit 1
+#fi
 
 # Set NO_DNS, if dnsmasq is disabled
 if [[ $NO_DNSMASQ -eq 1 ]]; then
@@ -1308,8 +1331,6 @@ if [[ $FREQ_BAND != 5 && $CHANNEL -gt 14 ]]; then
     FREQ_BAND=5
 fi
 
-WIFI_IFACE=$1
-
 if ! is_wifi_interface ${WIFI_IFACE}; then
     echo "ERROR: '${WIFI_IFACE}' is not a WiFi interface" >&2
     exit 1
@@ -1372,37 +1393,12 @@ if [[ -n "$NEW_MACADDR" ]]; then
     fi
 fi
 
-if [[ "$SHARE_METHOD" != "none" ]]; then
-    MIN_REQUIRED_ARGS=2
-else
-    MIN_REQUIRED_ARGS=1
+if [[ "$SHARE_METHOD" != "none" ]] && ! [[ $INTERNET_IFACE ]]; then
+    echo "ERROR: If sharing method != none, you should specify the internet interfece" >&2
+    exit 1
 fi
 
-if [[ $# -gt $MIN_REQUIRED_ARGS ]]; then
-    if [[ "$SHARE_METHOD" != "none" ]]; then
-        if [[ $# -ne 3 && $# -ne 4 ]]; then
-            usage >&2
-            exit 1
-        fi
-        INTERNET_IFACE="$2"
-        SSID="$3"
-        PASSPHRASE="$4"
-    else
-        if [[ $# -ne 2 && $# -ne 3 ]]; then
-            usage >&2
-            exit 1
-        fi
-        SSID="$2"
-        PASSPHRASE="$3"
-    fi
-else
-    if [[ "$SHARE_METHOD" != "none" ]]; then
-        if [[ $# -ne 2 ]]; then
-            usage >&2
-            exit 1
-        fi
-        INTERNET_IFACE="$2"
-    fi
+if ! [[ $SSID ]]; then
     if tty -s; then
         while :; do
             read -p "SSID: " SSID
@@ -1412,6 +1408,13 @@ else
             fi
             break
         done
+    else
+        read SSID
+    fi
+fi
+
+if ! [[ $PASSPHRASE ]]; then
+    if tty -s; then
         while :; do
             if [[ $USE_PSK -eq 0 ]]; then
                 read -p "Passphrase: " -s PASSPHRASE
@@ -1437,7 +1440,6 @@ else
             fi
         done
     else
-        read SSID
         read PASSPHRASE
     fi
 fi
